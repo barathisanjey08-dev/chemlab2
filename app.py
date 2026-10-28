@@ -16,7 +16,7 @@ from reportlab.lib.enums import TA_CENTER
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import cm
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
 
 # ---------------------------------------------------------------------
 # ChemLab Studio — educational cheminformatics workspace
@@ -148,131 +148,259 @@ def viewer_3d(block, style, surface):
     </script>
     """
 
+def _property_interpretations(mol, props):
+    """Build readable, cautious explanations for calculated molecular descriptors."""
+    from rdkit.Chem import rdMolDescriptors as rdmd
+    formula = rdmd.CalcMolFormula(mol)
+    exact_mass = Descriptors.ExactMolWt(mol)
+    logp = Descriptors.MolLogP(mol)
+    tpsa = rdmd.CalcTPSA(mol)
+    hbd = rdmd.CalcNumHBD(mol)
+    hba = rdmd.CalcNumHBA(mol)
+    rot = rdmd.CalcNumRotatableBonds(mol)
+    rings = rdmd.CalcNumRings(mol)
+    aromatic = rdmd.CalcNumAromaticRings(mol)
+    aliphatic = rdmd.CalcNumAliphaticRings(mol)
+    heavy = mol.GetNumHeavyAtoms()
+    heavy_bonds = sum(1 for b in mol.GetBonds() if b.GetBeginAtom().GetAtomicNum() > 1 and b.GetEndAtom().GetAtomicNum() > 1)
+    mol_h = Chem.AddHs(Chem.Mol(mol))
+    total_atoms = mol_h.GetNumAtoms()
+    total_bonds = mol_h.GetNumBonds()
+    pi_bonds = sum(2 if b.GetBondType() == Chem.BondType.TRIPLE else 1 if b.GetBondType() == Chem.BondType.DOUBLE else 0 for b in mol.GetBonds())
+    sigma_bonds = total_bonds - pi_bonds
+    frac_csp3 = rdmd.CalcFractionCSP3(mol)
+    mol_refr = Descriptors.MolMR(mol)
+    rows = [
+        ("Molecular Formula", formula, "Shows the elemental composition of the molecule and is useful for understanding its basic chemical composition."),
+        ("Molecular Weight (g/mol)", f"{Descriptors.MolWt(mol):.3f}", "Represents the average molecular mass. Molecular size and mass can influence diffusion and many physical behaviours."),
+        ("Exact Molecular Weight (Da)", f"{exact_mass:.4f}", "Monoisotopic mass calculated from exact isotopic masses; useful in mass-spectrometry comparisons."),
+        ("LogP", f"{logp:.3f}", "A calculated estimate of partitioning between oily and aqueous environments. Higher values generally indicate greater lipophilicity; it is not a direct solubility measurement."),
+        ("TPSA (Å²)", f"{tpsa:.2f}", "Estimated polar surface area from polar atoms. It helps compare molecular polarity but is not a direct measurement of absorption."),
+        ("Hydrogen Bond Donors", str(hbd), f"The structure contains {hbd} hydrogen-bond donor site(s), which can donate hydrogen in suitable intermolecular interactions."),
+        ("Hydrogen Bond Acceptors", str(hba), f"The structure contains {hba} hydrogen-bond acceptor site(s), which can accept hydrogen in suitable interactions."),
+        ("Rotatable Bonds", str(rot), f"{rot} rotatable bond(s) provide a rough indication of conformational flexibility."),
+        ("Ring Count", str(rings), f"The molecule contains {rings} ring(s), which contribute to its overall shape and structural constraints."),
+        ("Aromatic Rings", str(aromatic), f"{aromatic} aromatic ring(s) contribute to aromaticity, planarity and delocalized π-electron character where present."),
+        ("Aliphatic Rings", str(aliphatic), f"{aliphatic} aliphatic ring(s) contribute cyclic structure without aromatic π-electron delocalization."),
+        ("Number of Heavy Atoms", str(heavy), f"Counts non-hydrogen atoms; a useful simple measure of molecular structure size. The hydrogen-expanded model has {total_atoms} total atoms."),
+        ("Heavy Atom Bonds", str(heavy_bonds), "Counts connections between non-hydrogen atoms in the molecular graph."),
+        ("Sigma (σ) Bonds", str(sigma_bonds), "Approximate count of σ-bond components in the hydrogen-expanded structure; each ordinary bonded pair contributes a σ bond."),
+        ("Pi (π) Bonds", str(pi_bonds), "Counts π-bond components associated with double and triple bonds; aromatic bonding is represented by the toolkit's aromatic model."),
+        ("Total Bonds (σ + π)", str(total_bonds), "Total bonds in the hydrogen-expanded molecular model. Bond-order conventions can affect simple σ/π summaries."),
+        ("Fraction Csp³", f"{frac_csp3:.3f}", "Fraction of carbon atoms assigned sp³ hybridization; a higher value often indicates a more saturated 3D carbon framework."),
+        ("Molar Refractivity", f"{mol_refr:.2f}", "A calculated descriptor related to molecular volume and electronic polarizability."),
+    ]
+    return rows
+
+
+def _molecule_images(mol):
+    """Return in-memory 2D and 3D PNGs for the PDF; 3D coordinates are computational."""
+    from rdkit.Chem import Draw
+    # 2D structure
+    m2 = Chem.Mol(mol)
+    Chem.rdDepictor.Compute2DCoords(m2)
+    img2 = Draw.MolToImage(m2, size=(950, 560), kekulize=True, wedgeBonds=True)
+    b2 = BytesIO()
+    img2.save(b2, format="PNG")
+    b2.seek(0)
+
+    # A compact 3D ball-and-stick rendering using generated coordinates.
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
+    m3 = Chem.AddHs(Chem.Mol(mol))
+    params = AllChem.ETKDGv3()
+    params.randomSeed = 17
+    status = AllChem.EmbedMolecule(m3, params)
+    if status != 0:
+        raise ValueError("Could not generate a 3D conformer for this molecule.")
+    try:
+        AllChem.MMFFOptimizeMolecule(m3, maxIters=250)
+    except Exception:
+        try:
+            AllChem.UFFOptimizeMolecule(m3, maxIters=250)
+        except Exception:
+            pass
+    conf = m3.GetConformer()
+    coords = [conf.GetAtomPosition(i) for i in range(m3.GetNumAtoms())]
+    xyz = [(p.x, p.y, p.z) for p in coords]
+    fig = plt.figure(figsize=(7.4, 4.2), dpi=170)
+    ax = fig.add_subplot(111, projection="3d")
+    element_colors = {1: "#F5F7FA", 6: "#50545A", 7: "#315DCE", 8: "#D83333", 9: "#3B9B63", 15: "#E68A2E", 16: "#E2C13B", 17: "#38A16A"}
+    radii = {1: 18, 6: 45, 7: 48, 8: 48, 9: 48, 15: 55, 16: 55, 17: 50}
+    for bond in m3.GetBonds():
+        a, b = xyz[bond.GetBeginAtomIdx()], xyz[bond.GetEndAtomIdx()]
+        ax.plot([a[0], b[0]], [a[1], b[1]], [a[2], b[2]], color="#777D86", linewidth=2.6, zorder=1)
+    for i, atom in enumerate(m3.GetAtoms()):
+        x, y, z = xyz[i]
+        ax.scatter(x, y, z, s=radii.get(atom.GetAtomicNum(), 42), color=element_colors.get(atom.GetAtomicNum(), "#9B59B6"), edgecolors="#33383E", linewidths=0.55, depthshade=True, zorder=3)
+    ax.view_init(elev=22, azim=35)
+    ax.set_axis_off()
+    try:
+        ax.set_box_aspect((1, 1, 0.72))
+    except Exception:
+        pass
+    fig.patch.set_facecolor("white")
+    plt.tight_layout(pad=0.2)
+    b3 = BytesIO()
+    fig.savefig(b3, format="PNG", bbox_inches="tight", facecolor="white", transparent=False)
+    plt.close(fig)
+    b3.seek(0)
+    return b2, b3
+
+
 def pdf_report(student, reg, course, experiment, mol_name, smiles, canonical, props, note=""):
-    """Create a polished, printable A4 practical report with student details."""
+    """Create an A4 molecular analysis report styled like a formal university practical."""
+    from reportlab.platypus import Image as RLImage, KeepTogether
     buffer = BytesIO()
+    navy = colors.HexColor("#173F70")
+    blue = colors.HexColor("#315D9B")
+    pale_blue = colors.HexColor("#EAF0F8")
+    line_blue = colors.HexColor("#C7D3E2")
+    text_col = colors.HexColor("#202B38")
     doc = SimpleDocTemplate(
-        buffer, pagesize=A4,
-        leftMargin=1.65*cm, rightMargin=1.65*cm,
-        topMargin=2.15*cm, bottomMargin=1.8*cm,
-        title=f"ChemLab Studio Practical Report - {mol_name}",
-        author="ChemLab Studio",
-        subject="Educational cheminformatics practical report",
+        buffer, pagesize=A4, leftMargin=1.45*cm, rightMargin=1.45*cm,
+        topMargin=1.45*cm, bottomMargin=1.45*cm,
+        title=f"Final Student Molecular Analysis Report - {mol_name}",
+        author="ChemLab Studio", subject="Educational cheminformatics molecular analysis",
     )
     styles = getSampleStyleSheet()
-    styles.add(ParagraphStyle(
-        name="ChemTitle", parent=styles["Title"], alignment=TA_CENTER,
-        textColor=colors.HexColor("#0B6670"), fontName="Helvetica-Bold",
-        fontSize=20, leading=24, spaceAfter=4,
-    ))
-    styles.add(ParagraphStyle(
-        name="ChemSubtitle", parent=styles["Normal"], alignment=TA_CENTER,
-        textColor=colors.HexColor("#526777"), fontSize=9, leading=12,
-        spaceAfter=13,
-    ))
-    styles.add(ParagraphStyle(
-        name="ChemHead", parent=styles["Heading2"],
-        textColor=colors.HexColor("#087E8B"), fontName="Helvetica-Bold",
-        fontSize=11, leading=14, spaceBefore=11, spaceAfter=5,
-        keepWithNext=True,
-    ))
-    styles.add(ParagraphStyle(
-        name="ChemBody", parent=styles["BodyText"],
-        textColor=colors.HexColor("#263746"), fontSize=9.2,
-        leading=13.2, spaceAfter=5,
-    ))
-    styles.add(ParagraphStyle(
-        name="ChemSmall", parent=styles["BodyText"],
-        textColor=colors.HexColor("#526777"), fontSize=7.7, leading=10,
-    ))
-    exp = EXPERIMENTS[experiment]
-    # Escape all user-controlled text before placing it in ReportLab Paragraph markup.
+    styles.add(ParagraphStyle(name="ReportTitleCL", parent=styles["Title"], alignment=TA_CENTER,
+        textColor=navy, fontName="Helvetica-Bold", fontSize=18, leading=22, spaceAfter=12))
+    styles.add(ParagraphStyle(name="ReportSubtitleCL", parent=styles["Heading2"], alignment=TA_CENTER,
+        textColor=navy, fontName="Helvetica-Bold", fontSize=12, leading=15, spaceBefore=0, spaceAfter=13))
+    styles.add(ParagraphStyle(name="SectionCL", parent=styles["Heading2"], textColor=navy,
+        fontName="Helvetica-Bold", fontSize=12, leading=15, spaceBefore=11, spaceAfter=6, keepWithNext=True))
+    styles.add(ParagraphStyle(name="BodyCL", parent=styles["BodyText"], textColor=text_col,
+        fontName="Helvetica", fontSize=7.8, leading=9.6, spaceAfter=3))
+    styles.add(ParagraphStyle(name="SmallCL", parent=styles["BodyText"], textColor=text_col,
+        fontName="Helvetica", fontSize=7.4, leading=9.1))
+    styles.add(ParagraphStyle(name="TableHeadCL", parent=styles["BodyText"], textColor=colors.white,
+        fontName="Helvetica-Bold", fontSize=7.5, leading=9))
+    styles.add(ParagraphStyle(name="PropertyCL", parent=styles["BodyText"], textColor=text_col,
+        fontName="Helvetica", fontSize=7.2, leading=8.8))
+    styles.add(ParagraphStyle(name="InterpretCL", parent=styles["BodyText"], textColor=text_col,
+        fontName="Helvetica", fontSize=6.5, leading=7.7))
     safe = lambda value: escape(str(value or "Not provided"))
+    mol = parse_molecule(smiles)
+    formula = rdMolDescriptors.CalcMolFormula(mol)
+    img2, img3 = _molecule_images(mol)
+    exp = EXPERIMENTS.get(experiment, EXPERIMENTS["Molecular descriptor analysis"])
     story = [
-        Paragraph("CHEMLAB STUDIO", styles["ChemTitle"]),
-        Paragraph("MOLECULAR DISCOVERY LABORATORY  |  PRACTICAL REPORT", styles["ChemSubtitle"]),
+        Paragraph("CHEMINFORMATICS VIRTUAL LABORATORY", styles["ReportTitleCL"]),
+        Paragraph("FINAL STUDENT MOLECULAR ANALYSIS REPORT", styles["ReportSubtitleCL"]),
     ]
-    info = [
-        [Paragraph("<b>STUDENT NAME</b>", styles["ChemSmall"]), Paragraph(safe(student), styles["ChemBody"]),
-         Paragraph("<b>REGISTRATION NO.</b>", styles["ChemSmall"]), Paragraph(safe(reg), styles["ChemBody"])],
-        [Paragraph("<b>PROGRAMME / COURSE</b>", styles["ChemSmall"]), Paragraph(safe(course), styles["ChemBody"]),
-         Paragraph("<b>REPORT DATE</b>", styles["ChemSmall"]), Paragraph(date.today().strftime("%d %B %Y"), styles["ChemBody"])],
-        [Paragraph("<b>PRACTICAL</b>", styles["ChemSmall"]), Paragraph(safe(experiment), styles["ChemBody"]),
-         Paragraph("<b>MOLECULE</b>", styles["ChemSmall"]), Paragraph(safe(mol_name), styles["ChemBody"])],
+    student_rows = [
+        [Paragraph("Student Name", styles["SmallCL"]), Paragraph(safe(student), styles["BodyCL"])],
+        [Paragraph("Registration Number", styles["SmallCL"]), Paragraph(safe(reg), styles["BodyCL"])],
+        [Paragraph("Input SMILES", styles["SmallCL"]), Paragraph(f"<font name='Courier'>{safe(smiles)}</font>", styles["BodyCL"])],
+        [Paragraph("Canonical SMILES", styles["SmallCL"]), Paragraph(f"<font name='Courier'>{safe(canonical)}</font>", styles["BodyCL"])],
+        [Paragraph("Molecular Formula", styles["SmallCL"]), Paragraph(safe(formula), styles["BodyCL"])],
     ]
-    info_tbl = Table(info, colWidths=[2.7*cm, 5.1*cm, 2.8*cm, 5.0*cm], hAlign="LEFT")
-    info_tbl.setStyle(TableStyle([
-        ("BACKGROUND", (0,0), (-1,-1), colors.HexColor("#F1F7F8")),
-        ("GRID", (0,0), (-1,-1), 0.45, colors.HexColor("#C7D9DD")),
-        ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
-        ("LEFTPADDING", (0,0), (-1,-1), 7), ("RIGHTPADDING", (0,0), (-1,-1), 7),
-        ("TOPPADDING", (0,0), (-1,-1), 7), ("BOTTOMPADDING", (0,0), (-1,-1), 4),
+    info = Table(student_rows, colWidths=[4.9*cm, 12.0*cm], hAlign="CENTER")
+    info.setStyle(TableStyle([
+        ("BACKGROUND", (0,0), (0,-1), pale_blue), ("GRID", (0,0), (-1,-1), 0.45, colors.HexColor("#9AA7B6")),
+        ("VALIGN", (0,0), (-1,-1), "MIDDLE"), ("LEFTPADDING", (0,0), (-1,-1), 6),
+        ("RIGHTPADDING", (0,0), (-1,-1), 6), ("TOPPADDING", (0,0), (-1,-1), 3.5),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 3.5),
     ]))
-    story.extend([
-        info_tbl,
-        Paragraph("1. AIM", styles["ChemHead"]), Paragraph(safe(exp["aim"]), styles["ChemBody"]),
-        Paragraph("2. THEORY", styles["ChemHead"]), Paragraph(safe(exp["theory"]), styles["ChemBody"]),
-        Paragraph("3. PROCEDURE", styles["ChemHead"]), Paragraph(safe(exp["procedure"]), styles["ChemBody"]),
-        Paragraph("4. MOLECULAR INPUT", styles["ChemHead"]),
-        Paragraph(f"<b>Molecule:</b> {safe(mol_name)}", styles["ChemBody"]),
-        Paragraph(f"<b>Input SMILES:</b> <font name='Courier'>{safe(smiles)}</font>", styles["ChemBody"]),
-        Paragraph(f"<b>Canonical SMILES:</b> <font name='Courier'>{safe(canonical)}</font>", styles["ChemBody"]),
-        Paragraph("5. COMPUTED RESULTS", styles["ChemHead"]),
-    ])
-    rows = [[Paragraph("<b>MOLECULAR DESCRIPTOR</b>", styles["ChemSmall"]), Paragraph("<b>CALCULATED VALUE</b>", styles["ChemSmall"])]]
-    rows += [[Paragraph(safe(k), styles["ChemBody"]), Paragraph(safe(v), styles["ChemBody"])] for k, v in props.items()]
-    result_table = Table(rows, colWidths=[9.2*cm, 6.3*cm], repeatRows=1, hAlign="LEFT")
-    result_table.setStyle(TableStyle([
-        ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#0B6670")),
-        ("TEXTCOLOR", (0,0), (-1,0), colors.white),
-        ("GRID", (0,0), (-1,-1), 0.4, colors.HexColor("#C5D9DC")),
-        ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.white, colors.HexColor("#F3F8F9")]),
-        ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
-        ("LEFTPADDING", (0,0), (-1,-1), 7), ("RIGHTPADDING", (0,0), (-1,-1), 7),
-        ("TOPPADDING", (0,0), (-1,-1), 3), ("BOTTOMPADDING", (0,0), (-1,-1), 1),
+    story.extend([info, Paragraph("1. Molecular Structures", styles["SectionCL"])])
+    struct_tbl = Table([
+        [Paragraph("<b>2D Molecular Structure</b>", styles["SmallCL"]), Paragraph("<b>3D Molecular Structure (Ball-and-Stick)</b>", styles["SmallCL"])],
+        [RLImage(img2, width=7.4*cm, height=4.35*cm, kind="proportional"), RLImage(img3, width=7.4*cm, height=4.35*cm, kind="proportional")],
+    ], colWidths=[8.1*cm, 8.1*cm], hAlign="CENTER")
+    struct_tbl.setStyle(TableStyle([
+        ("ALIGN", (0,0), (-1,-1), "CENTER"), ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+        ("LEFTPADDING", (0,0), (-1,-1), 2), ("RIGHTPADDING", (0,0), (-1,-1), 2),
+        ("TOPPADDING", (0,0), (-1,-1), 2), ("BOTTOMPADDING", (0,0), (-1,-1), 2),
     ]))
-    story.append(result_table)
-    if note.strip():
-        story.extend([Paragraph("6. OBSERVATIONS & INTERPRETATION", styles["ChemHead"]), Paragraph(safe(note).replace("\n", "<br/>"), styles["ChemBody"])])
+    story.extend([struct_tbl, Paragraph("Figure 1. Left: 2D molecular connectivity. Right: generated 3D ball-and-stick geometry showing a possible spatial arrangement of atoms.", styles["SmallCL"]),
+        Paragraph("2. Complete Molecular Properties and Interpretation", styles["SectionCL"])])
+    property_rows = _property_interpretations(mol, props)
+    def make_property_table(rows):
+        table_data = [[Paragraph("Property", styles["TableHeadCL"]), Paragraph("Value", styles["TableHeadCL"]), Paragraph("Interpretation", styles["TableHeadCL"])]]
+        for name, value, interpretation in rows:
+            table_data.append([Paragraph(safe(name), styles["PropertyCL"]), Paragraph(safe(value), styles["PropertyCL"]), Paragraph(safe(interpretation), styles["InterpretCL"])])
+        table = Table(table_data, colWidths=[4.0*cm, 2.2*cm, 10.7*cm], repeatRows=1, hAlign="CENTER")
+        table.setStyle(TableStyle([
+            ("BACKGROUND", (0,0), (-1,0), blue), ("GRID", (0,0), (-1,-1), 0.4, colors.HexColor("#9BA7B5")),
+            ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.white, colors.HexColor("#F3F6FA")]),
+            ("VALIGN", (0,0), (-1,-1), "TOP"), ("LEFTPADDING", (0,0), (-1,-1), 4),
+            ("RIGHTPADDING", (0,0), (-1,-1), 4), ("TOPPADDING", (0,0), (-1,-1), 2.2),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 2.2),
+        ]))
+        return table
+    # Split the descriptor table deliberately, matching the supplied two-page report example.
+    split_at = 9
+    story.append(make_property_table(property_rows[:split_at]))
+    story.extend([PageBreak(), Paragraph("2. Complete Molecular Properties and Interpretation (continued)", styles["SectionCL"]), make_property_table(property_rows[split_at:])])
+    story.append(Paragraph("3. Point-wise Molecular Interpretation", styles["SectionCL"]))
+    logp = Descriptors.MolLogP(mol)
+    tpsa = rdMolDescriptors.CalcTPSA(mol)
+    hbd = rdMolDescriptors.CalcNumHBD(mol)
+    hba = rdMolDescriptors.CalcNumHBA(mol)
+    rot = rdMolDescriptors.CalcNumRotatableBonds(mol)
+    rings = rdMolDescriptors.CalcNumRings(mol)
+    aromatic = rdMolDescriptors.CalcNumAromaticRings(mol)
+    sigma_pi = next((r for r in property_rows if r[0] == "Sigma (σ) Bonds"), None)
+    pi_row = next((r for r in property_rows if r[0] == "Pi (π) Bonds"), None)
+    fraction = rdMolDescriptors.CalcFractionCSP3(mol)
+    bullet_points = [
+        ("Molecular identity", f"The submitted structure has molecular formula <b>{safe(formula)}</b> and molecular weight <b>{Descriptors.MolWt(mol):.3f} g/mol</b>."),
+        ("Lipophilicity", f"Calculated LogP = <b>{logp:.3f}</b>. Higher values generally indicate greater preference for non-polar environments; this estimate is not a direct solubility measurement."),
+        ("Molecular polarity", f"TPSA = <b>{tpsa:.2f} Å²</b>. TPSA reflects contributions from polar atoms and functional groups to the estimated polar surface area."),
+        ("Hydrogen bonding", f"The structure contains <b>{hbd}</b> hydrogen-bond donor(s) and <b>{hba}</b> acceptor(s), useful for discussing possible intermolecular interactions."),
+        ("Flexibility", f"<b>{rot}</b> rotatable bond(s) indicate the approximate conformational freedom captured by this descriptor."),
+        ("Cyclic and aromatic character", f"The molecule contains <b>{rings}</b> ring(s), including <b>{aromatic}</b> aromatic ring(s). Aromatic rings are associated with delocalized π-electron systems."),
+        ("Bonding pattern", f"The calculated structure contains <b>{sigma_pi[1] if sigma_pi else '—'} σ bonds</b> and <b>{pi_row[1] if pi_row else '—'} π bonds</b> in the simplified hydrogen-expanded bond count."),
+        ("Three-dimensional character", f"Fraction Csp³ = <b>{fraction:.3f}</b>. This descriptor indicates the proportion of carbon atoms assigned sp³ hybridization."),
+        ("Overall conclusion", "The calculated descriptors should be interpreted together with the 2D connectivity and generated 3D geometry to understand composition, bonding, polarity, flexibility and structural character."),
+    ]
+    for title, body in bullet_points:
+        story.append(Paragraph(f"• <b>{title}:</b> {body}", styles["BodyCL"]))
+    if note and note.strip():
+        story.append(Paragraph("4. Student Observations", styles["SectionCL"]))
+        story.append(Paragraph(safe(note).replace("\n", "<br/>"), styles["BodyCL"]))
     story.extend([
-        Paragraph("CONCLUSION", styles["ChemHead"]),
-        Paragraph("The molecular structure was parsed and selected descriptors were calculated computationally. These values support educational analysis and comparison; they are not experimental measurements and do not independently establish biological activity, safety, or suitability for use.", styles["ChemBody"]),
-        Spacer(1, 9),
-        Paragraph("ACADEMIC INTEGRITY NOTE", styles["ChemHead"]),
-        Paragraph("Review the calculations and interpretation, add any institution-required details, and ensure the report accurately reflects your own work before submission.", styles["ChemSmall"]),
+        Paragraph("5. Learning Note", styles["SectionCL"]),
+        Paragraph("The numerical descriptors in this report are computationally calculated from the submitted molecular structure. The generated 3D conformer is one plausible model, not necessarily an experimentally observed geometry. Values should not be interpreted as experimental measurements or as proof of safety, medical suitability, or biological activity.", styles["BodyCL"]),
+        Paragraph("Practical details", styles["SectionCL"]),
+        Paragraph(f"<b>Practical topic:</b> {safe(experiment)} &nbsp;&nbsp; <b>Course:</b> {safe(course)} &nbsp;&nbsp; <b>Report date:</b> {date.today().strftime('%d %B %Y')}", styles["BodyCL"]),
+        Paragraph("Prepared using ChemLab Studio · Educational use only · Review your institution's requirements before submission.", styles["SmallCL"]),
     ])
     def page_decor(canvas, document):
         canvas.saveState()
         width, height = A4
-        canvas.setFillColor(colors.HexColor("#0B6670"))
-        canvas.rect(0, height - 0.55*cm, width, 0.55*cm, fill=1, stroke=0)
-        canvas.setStrokeColor(colors.HexColor("#D6E4E7"))
-        canvas.line(doc.leftMargin, 1.25*cm, width-doc.rightMargin, 1.25*cm)
-        canvas.setFont("Helvetica", 7.5)
-        canvas.setFillColor(colors.HexColor("#526777"))
-        canvas.drawString(doc.leftMargin, 0.88*cm, "CHEMLAB STUDIO  •  EDUCATIONAL CHEMINFORMATICS REPORT")
-        canvas.drawRightString(width-doc.rightMargin, 0.88*cm, f"Page {document.page}")
+        canvas.setFillColor(navy)
+        canvas.rect(0, height-0.32*cm, width, 0.32*cm, fill=1, stroke=0)
+        canvas.setStrokeColor(line_blue)
+        canvas.line(doc.leftMargin, 1.0*cm, width-doc.rightMargin, 1.0*cm)
+        canvas.setFont("Helvetica", 7.2)
+        canvas.setFillColor(colors.HexColor("#4B5A6B"))
+        canvas.drawString(doc.leftMargin, 0.68*cm, "CHEMINFORMATICS VIRTUAL LABORATORY  •  STUDENT MOLECULAR ANALYSIS")
+        canvas.drawRightString(width-doc.rightMargin, 0.68*cm, f"Page {document.page}")
         canvas.restoreState()
     doc.build(story, onFirstPage=page_decor, onLaterPages=page_decor)
     buffer.seek(0)
     return buffer.getvalue()
 
 def openai_answer(history, prompt):
-    """Call the OpenAI Responses API. The API key is read only from Streamlit secrets/env."""
+    """Call the OpenAI Responses API and return actionable, key-safe diagnostics."""
     try:
         api_key = st.secrets.get("OPENAI_API_KEY", os.getenv("OPENAI_API_KEY", ""))
     except Exception:
         api_key = os.getenv("OPENAI_API_KEY", "")
-    if not api_key:
-        return None, "OpenAI is not configured. Add OPENAI_API_KEY in Streamlit → Manage app → Settings → Secrets."
+    if not api_key or api_key == "YOUR_ACTUAL_OPENAI_API_KEY":
+        return None, "OpenAI API key is missing. Add OPENAI_API_KEY in Streamlit → Manage app → Settings → Secrets."
     try:
-        from openai import OpenAI
-        client = OpenAI(api_key=api_key, timeout=35.0, max_retries=1)
+        from openai import OpenAI, AuthenticationError, PermissionDeniedError, RateLimitError, APIConnectionError, APIStatusError
+        client = OpenAI(api_key=api_key, timeout=45.0, max_retries=1)
         conversation = []
         for item in history[-8:]:
             role = "assistant" if item.get("role") == "assistant" else "user"
             conversation.append({"role": role, "content": str(item.get("content", ""))})
-        conversation.append({"role": "user", "content": prompt})
+        conversation.append({"role": "user", "content": str(prompt)})
         response = client.responses.create(
             model="gpt-4.1-mini",
             instructions=(
@@ -288,11 +416,25 @@ def openai_answer(history, prompt):
         )
         answer = getattr(response, "output_text", "")
         if not answer:
-            return None, "OpenAI returned an empty answer. Please try asking the question again."
+            return None, "OpenAI returned no text for this request. Please try again with a shorter question."
         return answer, None
     except Exception as e:
-        # Show a concise diagnostic but never expose the API key.
-        return None, f"OpenAI API error: {str(e)[:350]}"
+        # Exception messages do not contain the secret key; never print the key itself.
+        err_name = type(e).__name__
+        msg = str(e).replace(api_key, "[API KEY REDACTED]")[:260]
+        lower = msg.lower()
+        if err_name == "AuthenticationError" or "invalid_api_key" in lower or "incorrect api key" in lower:
+            return None, "OpenAI rejected the API key. Create a new key at platform.openai.com/api-keys and update Streamlit Secrets."
+        if err_name == "PermissionDeniedError" or "model_not_found" in lower or "do not have access" in lower:
+            return None, "Your API project may not have access to gpt-4.1-mini. Check model access in the OpenAI API Platform; the app's model can be changed to one enabled for your project."
+        if err_name == "RateLimitError" or "insufficient_quota" in lower or "billing_hard_limit" in lower:
+            return None, "OpenAI API quota/billing issue. Check API billing, available credits, and project usage limits in the OpenAI API Platform. ChatGPT subscription billing is separate."
+        if err_name == "APIConnectionError":
+            return None, "The app could not connect to OpenAI. Try again in a minute and check OpenAI service status."
+        if err_name == "APIStatusError":
+            status = getattr(e, "status_code", "unknown")
+            return None, f"OpenAI returned HTTP {status}: {msg}. Check API billing, model access, and project limits."
+        return None, f"OpenAI API error ({err_name}): {msg}"
 
 # -------------------- Styling --------------------
 st.markdown("""
@@ -425,7 +567,7 @@ elif page == "Molecular Explorer":
             metrics[0].metric("Molecular weight", f"{props['Molecular weight (g/mol)']:.3f} g/mol")
             metrics[1].metric("Calculated LogP", props["Calculated LogP"])
             metrics[2].metric("TPSA", f"{props['Topological polar surface area (Å²)']} Å²")
-            st.dataframe(pd.DataFrame([{"Descriptor": k, "Value": v} for k,v in props.items()]), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame([{"Descriptor": str(k), "Value": str(v)} for k,v in props.items()]), use_container_width=True, hide_index=True)
             numeric = [(k,v) for k,v in props.items() if isinstance(v,(int,float))]
             st.bar_chart(pd.DataFrame(numeric, columns=["Descriptor","Value"]).set_index("Descriptor"))
         st.session_state.report_molecule = result
@@ -451,7 +593,7 @@ elif page == "Plain-language Molecule Guide":
         st.warning(info["caution"])
     with b:
         st.markdown("#### At a glance")
-        st.dataframe(pd.DataFrame([{"Property":k,"Value":v} for k,v in props.items()]), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame([{"Property":str(k),"Value":str(v)} for k,v in props.items()]), use_container_width=True, hide_index=True)
         components.html(viewer_2d(Chem.MolToSmiles(mol)), height=365, scrolling=False)
     with st.expander("What do the properties mean?"):
         st.markdown("""
@@ -480,7 +622,7 @@ elif page == "Property Comparison":
             diff = "—"
         rows.append({"Descriptor":key,name_a:va,name_b:vb,"B − A":diff})
     df = pd.DataFrame(rows)
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    st.dataframe(df.astype(str), use_container_width=True, hide_index=True)
     numeric_keys = [k for k in da if isinstance(da[k],(int,float)) and isinstance(db[k],(int,float))]
     chart = pd.DataFrame({"Descriptor":numeric_keys,name_a:[da[k] for k in numeric_keys],name_b:[db[k] for k in numeric_keys]}).set_index("Descriptor")
     st.markdown("### Descriptor comparison")
@@ -511,7 +653,7 @@ elif page == "Practical Report Builder":
             st.session_state.pdf_bytes = pdf
             st.session_state.pdf_filename = "ChemLab_Practical_Report_" + ("".join(c for c in report_registration if c.isalnum() or c in "-_") or "Student") + ".pdf"
             st.success("Your PDF report is ready.")
-            st.dataframe(pd.DataFrame([{"Descriptor":k,"Value":v} for k,v in props.items()]), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame([{"Descriptor":str(k),"Value":str(v)} for k,v in props.items()]), use_container_width=True, hide_index=True)
         except Exception as e:
             st.error(str(e))
     if "pdf_bytes" in st.session_state:
@@ -526,7 +668,7 @@ elif page == "AI Chemistry Assistant":
     except Exception:
         api_configured = bool(os.getenv("OPENAI_API_KEY", ""))
     if api_configured:
-        st.success("OpenAI API key detected. Responses will be generated by the configured GPT model.")
+        st.success("OpenAI API key detected. Responses will be generated by GPT-4.1 mini through the OpenAI API.")
     else:
         st.warning("OpenAI setup needed: add an API key in Streamlit app settings. A key is not included in the app code.")
     with st.expander("Connect OpenAI (one-time setup)"):
@@ -559,7 +701,8 @@ OPENAI_API_KEY = "YOUR_ACTUAL_OPENAI_API_KEY"
                 fallback = "SMILES is a text notation for atoms and bonds. RDKit parses it into a molecular graph and can generate a canonical SMILES representation. Different toolkits can produce different canonical strings for the same molecule."
             elif any(w in prompt.lower() for w in ["tpsa", "polar surface"]):
                 fallback = "TPSA is a calculated descriptor that estimates polar surface area associated with polar atoms. It can help compare molecules, but it is not a direct measurement of absorption or solubility."
-            st.caption(error or "The AI service did not return an answer.")
+            st.warning(fallback)
+            st.caption(f"Technical detail: {error or 'The AI service did not return an answer.'}")
             answer = fallback
         st.session_state.ai_history.append({"role": "assistant", "content": answer})
         with st.chat_message("assistant"):
