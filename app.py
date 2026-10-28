@@ -224,7 +224,7 @@ def gemini_answer(history, prompt):
     }
     try:
         response = requests.post(
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent",
             params={"key": api_key},
             json=payload,
             timeout=35,
