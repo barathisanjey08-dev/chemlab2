@@ -1,5 +1,6 @@
 import os
 import json
+from xml.sax.saxutils import escape
 from io import BytesIO
 from datetime import date
 
@@ -148,94 +149,150 @@ def viewer_3d(block, style, surface):
     """
 
 def pdf_report(student, reg, course, experiment, mol_name, smiles, canonical, props, note=""):
+    """Create a polished, printable A4 practical report with student details."""
     buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4, leftMargin=1.7*cm, rightMargin=1.7*cm, topMargin=1.5*cm, bottomMargin=1.5*cm)
-    s = getSampleStyleSheet()
-    s.add(ParagraphStyle(name="ChemTitle", parent=s["Title"], alignment=TA_CENTER, textColor=colors.HexColor("#0B6670"), spaceAfter=7))
-    s.add(ParagraphStyle(name="ChemHead", parent=s["Heading2"], textColor=colors.HexColor("#087E8B"), spaceBefore=10, spaceAfter=5))
-    s.add(ParagraphStyle(name="ChemBody", parent=s["BodyText"], leading=14, spaceAfter=5))
+    doc = SimpleDocTemplate(
+        buffer, pagesize=A4,
+        leftMargin=1.65*cm, rightMargin=1.65*cm,
+        topMargin=2.15*cm, bottomMargin=1.8*cm,
+        title=f"ChemLab Studio Practical Report - {mol_name}",
+        author="ChemLab Studio",
+        subject="Educational cheminformatics practical report",
+    )
+    styles = getSampleStyleSheet()
+    styles.add(ParagraphStyle(
+        name="ChemTitle", parent=styles["Title"], alignment=TA_CENTER,
+        textColor=colors.HexColor("#0B6670"), fontName="Helvetica-Bold",
+        fontSize=20, leading=24, spaceAfter=4,
+    ))
+    styles.add(ParagraphStyle(
+        name="ChemSubtitle", parent=styles["Normal"], alignment=TA_CENTER,
+        textColor=colors.HexColor("#526777"), fontSize=9, leading=12,
+        spaceAfter=13,
+    ))
+    styles.add(ParagraphStyle(
+        name="ChemHead", parent=styles["Heading2"],
+        textColor=colors.HexColor("#087E8B"), fontName="Helvetica-Bold",
+        fontSize=11, leading=14, spaceBefore=11, spaceAfter=5,
+        keepWithNext=True,
+    ))
+    styles.add(ParagraphStyle(
+        name="ChemBody", parent=styles["BodyText"],
+        textColor=colors.HexColor("#263746"), fontSize=9.2,
+        leading=13.2, spaceAfter=5,
+    ))
+    styles.add(ParagraphStyle(
+        name="ChemSmall", parent=styles["BodyText"],
+        textColor=colors.HexColor("#526777"), fontSize=7.7, leading=10,
+    ))
     exp = EXPERIMENTS[experiment]
+    # Escape all user-controlled text before placing it in ReportLab Paragraph markup.
+    safe = lambda value: escape(str(value or "Not provided"))
     story = [
-        Paragraph("CHEMLAB STUDIO", s["ChemTitle"]),
-        Paragraph("Molecular Discovery — Practical Report", s["Heading2"]),
-        Spacer(1, 10),
+        Paragraph("CHEMLAB STUDIO", styles["ChemTitle"]),
+        Paragraph("MOLECULAR DISCOVERY LABORATORY  |  PRACTICAL REPORT", styles["ChemSubtitle"]),
     ]
     info = [
-        ["Student name", student or "Not provided", "Registration no.", reg or "Not provided"],
-        ["Programme / course", course or "Not provided", "Date", date.today().strftime("%d %B %Y")],
-        ["Experiment", experiment, "Molecule", mol_name],
+        [Paragraph("<b>STUDENT NAME</b>", styles["ChemSmall"]), Paragraph(safe(student), styles["ChemBody"]),
+         Paragraph("<b>REGISTRATION NO.</b>", styles["ChemSmall"]), Paragraph(safe(reg), styles["ChemBody"])],
+        [Paragraph("<b>PROGRAMME / COURSE</b>", styles["ChemSmall"]), Paragraph(safe(course), styles["ChemBody"]),
+         Paragraph("<b>REPORT DATE</b>", styles["ChemSmall"]), Paragraph(date.today().strftime("%d %B %Y"), styles["ChemBody"])],
+        [Paragraph("<b>PRACTICAL</b>", styles["ChemSmall"]), Paragraph(safe(experiment), styles["ChemBody"]),
+         Paragraph("<b>MOLECULE</b>", styles["ChemSmall"]), Paragraph(safe(mol_name), styles["ChemBody"])],
     ]
-    tbl = Table(info, colWidths=[2.7*cm, 5.2*cm, 2.7*cm, 5.0*cm])
-    tbl.setStyle(TableStyle([
-        ("BACKGROUND",(0,0),(-1,-1),colors.HexColor("#EAF4F5")),
-        ("GRID",(0,0),(-1,-1),0.4,colors.HexColor("#B7D1D5")),
-        ("FONTNAME",(0,0),(-1,-1),"Helvetica"),
-        ("FONTSIZE",(0,0),(-1,-1),8),
-        ("VALIGN",(0,0),(-1,-1),"TOP"),
-        ("LEFTPADDING",(0,0),(-1,-1),5),
-        ("RIGHTPADDING",(0,0),(-1,-1),5),
-        ("TOPPADDING",(0,0),(-1,-1),6),
-        ("BOTTOMPADDING",(0,0),(-1,-1),6),
+    info_tbl = Table(info, colWidths=[2.7*cm, 5.1*cm, 2.8*cm, 5.0*cm], hAlign="LEFT")
+    info_tbl.setStyle(TableStyle([
+        ("BACKGROUND", (0,0), (-1,-1), colors.HexColor("#F1F7F8")),
+        ("GRID", (0,0), (-1,-1), 0.45, colors.HexColor("#C7D9DD")),
+        ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+        ("LEFTPADDING", (0,0), (-1,-1), 7), ("RIGHTPADDING", (0,0), (-1,-1), 7),
+        ("TOPPADDING", (0,0), (-1,-1), 7), ("BOTTOMPADDING", (0,0), (-1,-1), 4),
     ]))
-    story.extend([tbl, Paragraph("1. Aim", s["ChemHead"]), Paragraph(exp["aim"], s["ChemBody"]),
-                  Paragraph("2. Theory", s["ChemHead"]), Paragraph(exp["theory"], s["ChemBody"]),
-                  Paragraph("3. Procedure", s["ChemHead"]), Paragraph(exp["procedure"], s["ChemBody"]),
-                  Paragraph("4. Molecular input", s["ChemHead"]),
-                  Paragraph(f"<b>Molecule:</b> {mol_name}", s["ChemBody"]),
-                  Paragraph(f"<b>Input SMILES:</b> {smiles}", s["ChemBody"]),
-                  Paragraph(f"<b>Canonical SMILES:</b> {canonical}", s["ChemBody"]),
-                  Paragraph("5. Results", s["ChemHead"])])
-    rows = [["Descriptor", "Calculated value"]] + [[str(k), str(v)] for k, v in props.items()]
-    result_table = Table(rows, colWidths=[9.0*cm, 6.5*cm], repeatRows=1)
+    story.extend([
+        info_tbl,
+        Paragraph("1. AIM", styles["ChemHead"]), Paragraph(safe(exp["aim"]), styles["ChemBody"]),
+        Paragraph("2. THEORY", styles["ChemHead"]), Paragraph(safe(exp["theory"]), styles["ChemBody"]),
+        Paragraph("3. PROCEDURE", styles["ChemHead"]), Paragraph(safe(exp["procedure"]), styles["ChemBody"]),
+        Paragraph("4. MOLECULAR INPUT", styles["ChemHead"]),
+        Paragraph(f"<b>Molecule:</b> {safe(mol_name)}", styles["ChemBody"]),
+        Paragraph(f"<b>Input SMILES:</b> <font name='Courier'>{safe(smiles)}</font>", styles["ChemBody"]),
+        Paragraph(f"<b>Canonical SMILES:</b> <font name='Courier'>{safe(canonical)}</font>", styles["ChemBody"]),
+        Paragraph("5. COMPUTED RESULTS", styles["ChemHead"]),
+    ])
+    rows = [[Paragraph("<b>MOLECULAR DESCRIPTOR</b>", styles["ChemSmall"]), Paragraph("<b>CALCULATED VALUE</b>", styles["ChemSmall"])]]
+    rows += [[Paragraph(safe(k), styles["ChemBody"]), Paragraph(safe(v), styles["ChemBody"])] for k, v in props.items()]
+    result_table = Table(rows, colWidths=[9.2*cm, 6.3*cm], repeatRows=1, hAlign="LEFT")
     result_table.setStyle(TableStyle([
-        ("BACKGROUND",(0,0),(-1,0),colors.HexColor("#0B6670")),
-        ("TEXTCOLOR",(0,0),(-1,0),colors.white),
-        ("GRID",(0,0),(-1,-1),0.4,colors.HexColor("#C5D9DC")),
-        ("ROWBACKGROUNDS",(0,1),(-1,-1),[colors.white, colors.HexColor("#F2F8F8")]),
-        ("FONTSIZE",(0,0),(-1,-1),9),
-        ("TOPPADDING",(0,0),(-1,-1),6),
-        ("BOTTOMPADDING",(0,0),(-1,-1),6),
+        ("BACKGROUND", (0,0), (-1,0), colors.HexColor("#0B6670")),
+        ("TEXTCOLOR", (0,0), (-1,0), colors.white),
+        ("GRID", (0,0), (-1,-1), 0.4, colors.HexColor("#C5D9DC")),
+        ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.white, colors.HexColor("#F3F8F9")]),
+        ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+        ("LEFTPADDING", (0,0), (-1,-1), 7), ("RIGHTPADDING", (0,0), (-1,-1), 7),
+        ("TOPPADDING", (0,0), (-1,-1), 3), ("BOTTOMPADDING", (0,0), (-1,-1), 1),
     ]))
     story.append(result_table)
-    if note:
-        story.extend([Paragraph("6. Interpretation", s["ChemHead"]), Paragraph(note, s["ChemBody"])])
+    if note.strip():
+        story.extend([Paragraph("6. OBSERVATIONS & INTERPRETATION", styles["ChemHead"]), Paragraph(safe(note).replace("\n", "<br/>"), styles["ChemBody"])])
     story.extend([
-        Paragraph("Conclusion", s["ChemHead"]),
-        Paragraph("The molecular structure was parsed and its selected descriptors were calculated computationally. The values can support educational comparison but are not experimental measurements and do not alone establish biological activity, safety, or suitability for use.", s["ChemBody"]),
-        Spacer(1, 12),
-        Paragraph("Generated with ChemLab Studio · Educational use · Verify institutional submission requirements.", s["Italic"]),
+        Paragraph("CONCLUSION", styles["ChemHead"]),
+        Paragraph("The molecular structure was parsed and selected descriptors were calculated computationally. These values support educational analysis and comparison; they are not experimental measurements and do not independently establish biological activity, safety, or suitability for use.", styles["ChemBody"]),
+        Spacer(1, 9),
+        Paragraph("ACADEMIC INTEGRITY NOTE", styles["ChemHead"]),
+        Paragraph("Review the calculations and interpretation, add any institution-required details, and ensure the report accurately reflects your own work before submission.", styles["ChemSmall"]),
     ])
-    doc.build(story)
+    def page_decor(canvas, document):
+        canvas.saveState()
+        width, height = A4
+        canvas.setFillColor(colors.HexColor("#0B6670"))
+        canvas.rect(0, height - 0.55*cm, width, 0.55*cm, fill=1, stroke=0)
+        canvas.setStrokeColor(colors.HexColor("#D6E4E7"))
+        canvas.line(doc.leftMargin, 1.25*cm, width-doc.rightMargin, 1.25*cm)
+        canvas.setFont("Helvetica", 7.5)
+        canvas.setFillColor(colors.HexColor("#526777"))
+        canvas.drawString(doc.leftMargin, 0.88*cm, "CHEMLAB STUDIO  •  EDUCATIONAL CHEMINFORMATICS REPORT")
+        canvas.drawRightString(width-doc.rightMargin, 0.88*cm, f"Page {document.page}")
+        canvas.restoreState()
+    doc.build(story, onFirstPage=page_decor, onLaterPages=page_decor)
     buffer.seek(0)
     return buffer.getvalue()
 
-def gemini_answer(history, prompt):
-    api_key = st.secrets.get("GEMINI_API_KEY", os.getenv("GEMINI_API_KEY", ""))
-    if not api_key:
-        return None, "Gemini is not configured yet. Add a GEMINI_API_KEY in Streamlit → Manage app → Settings/Secrets. Until then, the built-in learning helper can answer common chemistry questions."
-    contents = []
-    for item in history[-8:]:
-        contents.append({"role": "user" if item["role"] == "user" else "model", "parts": [{"text": item["content"]}]})
-    contents.append({"role": "user", "parts": [{"text": prompt}]})
-    payload = {
-        "system_instruction": {"parts": [{"text": "You are ChemLab Guide, a patient educational assistant for chemistry, cheminformatics, molecular structures, SMILES, descriptors, and student project reports. Explain concepts simply, distinguish calculated estimates from experimental facts, and do not give medical diagnosis or unsafe chemical handling instructions. If asked about a molecule, explain its structure, properties, common uses, and safety caveats in plain language."}]},
-        "contents": contents,
-        "generationConfig": {"temperature": 0.45, "maxOutputTokens": 1200}
-    }
+def openai_answer(history, prompt):
+    """Call the OpenAI Responses API. The API key is read only from Streamlit secrets/env."""
     try:
-        response = requests.post(
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent",
-            params={"key": api_key},
-            json=payload,
-            timeout=35,
-        )
-        if response.status_code != 200:
-            return None, f"Gemini API returned status {response.status_code}. Check the API key, quota, and model access in your Google AI Studio settings."
-        data = response.json()
-        answer = data["candidates"][0]["content"]["parts"][0]["text"]
-        return answer, None
+        api_key = st.secrets.get("OPENAI_API_KEY", os.getenv("OPENAI_API_KEY", ""))
     except Exception:
-        return None, "Could not reach Gemini. Check the app's internet access and try again."
+        api_key = os.getenv("OPENAI_API_KEY", "")
+    if not api_key:
+        return None, "OpenAI is not configured. Add OPENAI_API_KEY in Streamlit → Manage app → Settings → Secrets."
+    try:
+        from openai import OpenAI
+        client = OpenAI(api_key=api_key, timeout=35.0, max_retries=1)
+        conversation = []
+        for item in history[-8:]:
+            role = "assistant" if item.get("role") == "assistant" else "user"
+            conversation.append({"role": role, "content": str(item.get("content", ""))})
+        conversation.append({"role": "user", "content": prompt})
+        response = client.responses.create(
+            model="gpt-4.1-mini",
+            instructions=(
+                "You are ChemLab Guide, a patient educational chemistry and cheminformatics tutor. "
+                "Explain molecular structures, SMILES, molecular weight, calculated LogP, TPSA, "
+                "hydrogen bonding, and chemistry coursework in clear, student-friendly language. "
+                "For molecules, discuss structure, properties, common uses, and relevant safety caveats. "
+                "Distinguish computational estimates from experimental facts. Do not provide medical diagnoses "
+                "or unsafe chemical handling instructions. Use headings and examples when useful."
+            ),
+            input=conversation,
+            max_output_tokens=1200,
+        )
+        answer = getattr(response, "output_text", "")
+        if not answer:
+            return None, "OpenAI returned an empty answer. Please try asking the question again."
+        return answer, None
+    except Exception as e:
+        # Show a concise diagnostic but never expose the API key.
+        return None, f"OpenAI API error: {str(e)[:350]}"
 
 # -------------------- Styling --------------------
 st.markdown("""
@@ -312,7 +369,7 @@ if page == "Overview":
         st.write("• Calculate molecular descriptors and compare compounds.")
         st.write("• Learn properties and everyday uses in simple language.")
         st.write("• Export a student-labelled PDF practical report.")
-        st.write("• Ask the AI assistant for help when a Gemini API key is configured.")
+        st.write("• Ask the AI assistant for help when an OpenAI API key is configured.")
     st.info("Tip: Fill in your student profile in the sidebar before creating your final PDF report.")
 
 elif page == "Molecular Explorer":
@@ -433,7 +490,14 @@ elif page == "Property Comparison":
 
 elif page == "Practical Report Builder":
     st.header("📄 Practical Report Builder")
-    st.write("Build a printable report using the student information from the sidebar and a validated molecular structure.")
+    st.write("Create a polished, print-ready practical report. Enter the student details below; they will be printed in the report header.")
+    student_col, reg_col = st.columns(2)
+    with student_col:
+        report_student = st.text_input("Student name", value=st.session_state.get("student_name", ""), key="report_student_name", placeholder="Enter full name")
+    with reg_col:
+        report_registration = st.text_input("Registration number", value=st.session_state.get("registration", ""), key="report_registration", placeholder="Enter registration number")
+    report_course = st.text_input("Programme / course", value=st.session_state.get("course", ""), key="report_course")
+    st.divider()
     report_name = st.text_input("Molecule name", value=st.session_state.get("current_molecule","Ethanol"), key="report_name")
     report_smiles = st.text_input("SMILES for report", value=st.session_state.get("current_smiles","CCO"), key="report_smiles")
     experiment = st.selectbox("Practical topic", list(EXPERIMENTS.keys()))
@@ -443,9 +507,9 @@ elif page == "Practical Report Builder":
             mol = parse_molecule(report_smiles)
             props = descriptors(mol)
             canonical = Chem.MolToSmiles(mol)
-            pdf = pdf_report(student_name, registration, course, experiment, report_name, report_smiles, canonical, props, interpretation.strip())
+            pdf = pdf_report(report_student.strip(), report_registration.strip(), report_course.strip(), experiment, report_name.strip(), report_smiles.strip(), canonical, props, interpretation.strip())
             st.session_state.pdf_bytes = pdf
-            st.session_state.pdf_filename = "ChemLab_Practical_Report_" + ("".join(c for c in registration if c.isalnum() or c in "-_") or "Student") + ".pdf"
+            st.session_state.pdf_filename = "ChemLab_Practical_Report_" + ("".join(c for c in report_registration if c.isalnum() or c in "-_") or "Student") + ".pdf"
             st.success("Your PDF report is ready.")
             st.dataframe(pd.DataFrame([{"Descriptor":k,"Value":v} for k,v in props.items()]), use_container_width=True, hide_index=True)
         except Exception as e:
@@ -457,44 +521,47 @@ elif page == "Practical Report Builder":
 elif page == "AI Chemistry Assistant":
     st.header("🤖 ChemLab AI Guide")
     st.write("Ask about molecular structures, SMILES, descriptors, organic chemistry, chemistry coursework, or how to interpret your report.")
-    api_configured = bool(st.secrets.get("GEMINI_API_KEY", os.getenv("GEMINI_API_KEY","")))
+    try:
+        api_configured = bool(st.secrets.get("OPENAI_API_KEY", os.getenv("OPENAI_API_KEY", "")))
+    except Exception:
+        api_configured = bool(os.getenv("OPENAI_API_KEY", ""))
     if api_configured:
-        st.success("Gemini API key detected. Responses will be generated by Gemini.")
+        st.success("OpenAI API key detected. Responses will be generated by the configured GPT model.")
     else:
-        st.warning("AI setup needed: add a Gemini API key to Streamlit secrets. The app will still provide a small built-in helper until then.")
-    with st.expander("How to connect Gemini (one-time setup)"):
+        st.warning("OpenAI setup needed: add an API key in Streamlit app settings. A key is not included in the app code.")
+    with st.expander("Connect OpenAI (one-time setup)"):
         st.markdown("""
-1. Open your app on Streamlit Community Cloud.
-2. Click **Manage app** → **Settings** → **Secrets** (menu wording can vary).
-3. Add this line, replacing the placeholder with your own key from Google AI Studio:
+1. Create an API key in the [OpenAI API Platform](https://platform.openai.com/api-keys).
+2. Open this app's **Manage app → Settings → Secrets**.
+3. Add the following TOML line with your own key:
 ```toml
-GEMINI_API_KEY = "PASTE_YOUR_GEMINI_API_KEY_HERE"
+OPENAI_API_KEY = "YOUR_ACTUAL_OPENAI_API_KEY"
 ```
-4. Save and reboot the app. **Never paste your API key into GitHub or share it in screenshots.**
+4. Save the secret and allow the app to restart.
+
+**Keep the key private.** ChatGPT subscriptions and API billing are separate; API usage may require billing to be enabled.
 """)
     for msg in st.session_state.ai_history:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
     prompt = st.chat_input("Ask ChemLab Guide a question…")
     if prompt:
-        st.session_state.ai_history.append({"role":"user","content":prompt})
+        st.session_state.ai_history.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
-        answer, error = gemini_answer(st.session_state.ai_history[:-1], prompt)
+        answer, error = openai_answer(st.session_state.ai_history[:-1], prompt)
         if answer is None:
-            # transparent fallback: do not pretend this is AI-generated
-            fallback = ("I can help with common chemistry topics. Try the Theory & Mini Quiz page or the Plain-language Molecule Guide. "
-                        "For a personalised answer to your question, configure the Gemini API key using the instructions above.")
-            if any(w in prompt.lower() for w in ["logp","hydrophobic"]):
-                fallback = "Calculated LogP estimates how a neutral molecule partitions between an oily phase and water. A higher value generally indicates greater hydrophobic character, but it is not a direct measurement of solubility. Configure Gemini for open-ended question answering."
-            elif any(w in prompt.lower() for w in ["smiles","canonical"]):
-                fallback = "SMILES is a text notation for atoms and bonds. RDKit parses it into a molecular graph, then can generate a canonical SMILES representation. Different toolkits can produce different canonical strings for the same molecule. Configure Gemini for broader help."
-            elif any(w in prompt.lower() for w in ["tpsa","polar surface"]):
-                fallback = "TPSA is a calculated descriptor that estimates the polar surface area associated with polar atoms. It can help compare molecules, but should not be treated as a direct measurement of absorption or solubility."
+            fallback = ("I couldn't reach the GPT service for this request. Check the API key, API billing, model access, and then try again. "
+                        "You can still explore the Plain-language Molecule Guide and Theory & Mini Quiz pages.")
+            if any(w in prompt.lower() for w in ["logp", "hydrophobic"]):
+                fallback = "Calculated LogP estimates how a neutral molecule partitions between an oily phase and water. A higher value generally indicates greater hydrophobic character, but it is not a direct measurement of solubility."
+            elif any(w in prompt.lower() for w in ["smiles", "canonical"]):
+                fallback = "SMILES is a text notation for atoms and bonds. RDKit parses it into a molecular graph and can generate a canonical SMILES representation. Different toolkits can produce different canonical strings for the same molecule."
+            elif any(w in prompt.lower() for w in ["tpsa", "polar surface"]):
+                fallback = "TPSA is a calculated descriptor that estimates polar surface area associated with polar atoms. It can help compare molecules, but it is not a direct measurement of absorption or solubility."
+            st.caption(error or "The AI service did not return an answer.")
             answer = fallback
-            if error:
-                st.caption(error)
-        st.session_state.ai_history.append({"role":"assistant","content":answer})
+        st.session_state.ai_history.append({"role": "assistant", "content": answer})
         with st.chat_message("assistant"):
             st.markdown(answer)
     if st.button("Clear chat history"):
